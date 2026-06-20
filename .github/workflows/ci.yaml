@@ -1,0 +1,223 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - 'main'
+      - 'hml'
+
+env:
+  APPS_ROOT: apps
+
+jobs:
+  detect-changed-apps:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.detect.outputs.services }}
+      services_count: ${{ steps.detect.outputs.services_count }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Detect changed apps
+        id: detect
+        run: |
+          set -euo pipefail
+
+          BEFORE_SHA="${{ github.event.before }}"
+          CURRENT_SHA="${{ github.sha }}"
+
+          if [[ ! -d "$APPS_ROOT" ]]; then
+            echo "Diretório APPS_ROOT não existe: $APPS_ROOT"
+            exit 1
+          fi
+
+          mapfile -t all_services < <(find "$APPS_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+          if [[ ${#all_services[@]} -eq 0 ]]; then
+            echo "Nenhuma pasta de serviço em $APPS_ROOT"
+            exit 1
+          fi
+
+          if [[ -z "${BEFORE_SHA}" || "${BEFORE_SHA}" =~ ^0+$ ]]; then
+            printf '%s\n' "${all_services[@]}" > changed_apps.txt
+            echo "before SHA ausente/zerado; usando todos os apps."
+          else
+            git diff --name-only "${BEFORE_SHA}" "${CURRENT_SHA}" > changed_files.txt
+
+            if awk '/^packages\// { found=1; exit } END { exit !found }' changed_files.txt; then
+              printf '%s\n' "${all_services[@]}" > changed_apps.txt
+              echo "Mudança detectada em packages/*; usando todos os apps."
+            else
+              awk -F/ '/^apps\/[^/]+\// { print $2 }' changed_files.txt \
+                | sort -u > changed_apps.txt
+            fi
+          fi
+
+          if [[ ! -s changed_apps.txt ]]; then
+            echo "Nenhum app alterado em apps/*."
+            echo "services=[]" >> "$GITHUB_OUTPUT"
+            echo "services_count=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mapfile -t changed_services < changed_apps.txt
+          services_json=$(printf '%s\n' "${changed_services[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "Services alterados: $services_json"
+          echo "services=$services_json" >> "$GITHUB_OUTPUT"
+          echo "services_count=${#changed_services[@]}" >> "$GITHUB_OUTPUT"
+
+  build:
+    runs-on: ubuntu-latest
+    needs: detect-changed-apps
+    if: needs.detect-changed-apps.outputs.services_count != '0'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set tag and AWS account
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          AWS_REGION=sa-east-1
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            TAG=prd-$(date +%s)
+          else
+            TAG=dev-$(date +%s)
+          fi
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID" >> $GITHUB_ENV
+          echo "AWS_REGION=$AWS_REGION" >> $GITHUB_ENV
+
+      - name: Ensure ECR repositories, build and push
+        env:
+          DOCKER_BUILDKIT: 1
+          NPM_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          CHANGED_SERVICES_JSON: ${{ needs.detect-changed-apps.outputs.services }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! -d "$APPS_ROOT" ]]; then
+            echo "Diretório APPS_ROOT não existe: $APPS_ROOT"
+            exit 1
+          fi
+
+          mapfile -t services < <(echo "$CHANGED_SERVICES_JSON" | jq -r '.[]')
+          if [[ ${#services[@]} -eq 0 ]]; then
+            echo "Nenhum app alterado para build."
+            exit 0
+          fi
+
+          IMAGE_URIS_FILE="${RUNNER_TEMP}/image_uris.tsv"
+          : > "$IMAGE_URIS_FILE"
+
+          for svc in "${services[@]}"; do
+            SERVICE_NAME=$(echo "$svc" | tr '[:upper:]' '[:lower:]')
+            echo "Serviço (pasta): $svc → ECR/config: $SERVICE_NAME"
+
+            if aws ecr describe-repositories \
+              --repository-names "$SERVICE_NAME" \
+              --region sa-east-1 > /dev/null 2>&1; then
+              echo "ECR $SERVICE_NAME já existe"
+            else
+              aws ecr create-repository \
+                --repository-name "$SERVICE_NAME" \
+                --image-scanning-configuration scanOnPush=true \
+                --encryption-configuration encryptionType=AES256 \
+                --region sa-east-1
+              echo "ECR $SERVICE_NAME criado"
+            fi
+
+            IMAGE="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE_NAME}:${TAG}"
+            DOCKERFILE="${APPS_ROOT}/${svc}/Dockerfile"
+
+            if [[ ! -f "$DOCKERFILE" ]]; then
+              echo "Sem Dockerfile em $DOCKERFILE — ajuste o layout ou adicione o arquivo."
+              exit 1
+            fi
+
+            docker build \
+              --progress=plain \
+              --secret id=npm_token,env=NPM_TOKEN \
+              -t "$IMAGE" \
+              -f "$DOCKERFILE" \
+              .
+
+            docker push "$IMAGE"
+            printf '%s\t%s\n' "$SERVICE_NAME" "$IMAGE" >> "$IMAGE_URIS_FILE"
+          done
+
+          cp "$IMAGE_URIS_FILE" image_uris.tsv
+
+      - name: Upload image URIs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-uris
+          path: image_uris.tsv
+
+  push:
+    runs-on: ubuntu-latest
+    needs: build
+    if: needs.build.result == 'success'
+    steps:
+      - name: Download image URIs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-uris
+
+      - name: Checkout platform-config
+        uses: actions/checkout@v4
+        with:
+          repository: Mutual-Processadora-de-Pagamentos/platform-config
+          path: platform-config
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Patch deployments
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            ENV_DIR=prd
+          else
+            ENV_DIR=hml
+          fi
+
+          while IFS=$'\t' read -r SERVICE_NAME IMAGE_URI; do
+            [[ -z "${SERVICE_NAME:-}" ]] && continue
+            DEPLOY="platform-config/repo-configs/${SERVICE_NAME}/${ENV_DIR}/deployment.yaml"
+            if [[ ! -f "$DEPLOY" ]]; then
+              echo "Arquivo não encontrado: $DEPLOY (crie no platform-config ou alinhe o nome da pasta em ${APPS_ROOT})"
+              exit 1
+            fi
+            sed -i "s|image: .*|image: ${IMAGE_URI}|" "$DEPLOY"
+            echo "Atualizado: $DEPLOY"
+          done < image_uris.tsv
+
+      - name: Commit and push
+        run: |
+          cd platform-config
+          git config user.name "github-actions"
+          git config user.email "ci@github.com"
+          git add .
+          if git diff --staged --quiet; then
+            echo "Sem alterações no platform-config"
+          else
+            git commit -m "chore: update images [${GITHUB_REF_NAME}] $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push
+          fi
