@@ -1,5 +1,5 @@
 {
-	"name": "@ledger/config",
+	"name": "@casecellshop/config",
 	"private": true,
 	"version": "0.0.0",
 	"type": "module"

@@ -3,76 +3,79 @@ import { BaseDomain } from "./BaseDomain";
 import { GenerateId } from "./GenerateId";
 import { OrdemItem } from "./OrdemItem";
 
+export const StatusOrdemSchema = z.enum([
+	"pending",
+	"paid",
+	"shipped",
+	"delivered",
+	"cancelled",
+]);
 
-export const OrderSchema = z.object({
-    id: z.string(),
-    ordemItems: z.array(z.instanceof(OrdemItem)),
-    createdAt: z.date(),
-    updatedAt: z.date(),
-    total: z.float32(),
-    status: z.enum([
-        "pending",
-        "paid",
-        "shipped",
-        "delivered",
-        "cancelled",
-    ]),
-});
+export type StatusOrdemEnum = z.infer<typeof StatusOrdemSchema>;
+
+export const OrderSchema = z
+	.object({
+		id: z.string(),
+		ordemItems: z.array(z.instanceof(OrdemItem)),
+		createdAt: z.date(),
+		updatedAt: z.date(),
+		status: StatusOrdemSchema,
+	})
+	.transform((data) => ({
+		...data,
+		amount: data.ordemItems.reduce(
+			(acc, item) => acc + item.get("price") * item.get("quantity"),
+			0,
+		),
+	}));
 
 export type OrderProps = z.infer<typeof OrderSchema>;
 
 export class Order extends BaseDomain<OrderProps> {
-    static create(
-        props: Omit<
-            OrderProps,
-            "id" | "createdAt" | "updatedAt" | "deletedAt" | "total"
-        >
-    ): Order {
-        const now = new Date();
+	static create(props: Pick<OrderProps, "ordemItems">): Order {
+		const now = new Date();
 
-        return new Order({
-            id: GenerateId.generate("ord"),
-            ordemItems: props.ordemItems,
-            status: props.status,
-            createdAt: now,
-            updatedAt: now,
-            total: 0
-        });
-    }
+		return new Order({
+			id: GenerateId.generate("ord"),
+			ordemItems: props.ordemItems,
+			status: "pending",
+			createdAt: now,
+			updatedAt: now,
+			amount: Order.recalculateTotal(props.ordemItems),
+		});
+	}
 
-    static restore(props: OrderProps): Order {
-        return new Order(props);
-    }
+	static restore(props: OrderProps): Order {
+		return new Order(props);
+	}
 
-    markAsPaid(): void {
-        this.set("status", "paid");
-        this.set("updatedAt", new Date());
-    }
+	private static recalculateTotal(ordemItem: OrdemItem[]): number {
+		if (ordemItem?.length === 0) throw new Error("Nenhum produto adicionado");
 
-    markAsShipped(): void {
-        this.set("status", "shipped");
-        this.set("updatedAt", new Date());
-    }
+		const total = ordemItem!.reduce(
+			(acc, item) => acc + item.get("price") * item.get("quantity"),
+			0,
+		);
+		return total;
+	}
 
-    markAsDelivered(): void {
-        this.set("status", "delivered");
-        this.set("updatedAt", new Date());
-    }
+	markAsPaid(): void {
+		this.set("status", "paid");
+		this.set("updatedAt", new Date());
+	}
 
-    cancel(): void {
-        this.set("status", "cancelled");
-        this.set("updatedAt", new Date());
-    }
+	markAsShipped(): void {
+		this.set("status", "shipped");
+		this.set("updatedAt", new Date());
+	}
 
-    recalculateTotal(): void {
-        if(this.get("ordemItems")?.length == 0) throw new Error("Nenhum produto adicionado")
+	markAsDelivered(): void {
+		this.set("status", "delivered");
+		this.set("updatedAt", new Date());
+	}
 
-        const total = this.get("ordemItems")!.reduce(
-            (acc, item) => acc + item.get("price") * item.get("quantity"),
-            0
-        );
-
-        this.set("total", total);
-        this.set("updatedAt", new Date());
-    }
+	cancel(): void {
+		this.set("status", "cancelled");
+		this.set("updatedAt", new Date());
+	}
 }

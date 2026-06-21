@@ -1,0 +1,13 @@
+{
+	"extends": "../../packages/config/tsconfig.base.json",
+	"compilerOptions": {
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"composite": true,
+		"outDir": "dist"
+	},
+	"references": [
+		{ "path": "../../packages/db" },
+		{ "path": "../../packages/shared" }
+	]
+}

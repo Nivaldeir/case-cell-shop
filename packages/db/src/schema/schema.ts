@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text, numeric } from "drizzle-orm/sqlite-core";
+import { integer, numeric, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const productsTable = sqliteTable("products", {
 	id: text("id").primaryKey(),
@@ -46,6 +46,24 @@ export const paymentTable = sqliteTable("payment", {
 		.notNull()
 		.default("pending"),
 	amount: numeric("amount").notNull(),
+	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+	updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export const sagaExecutionsTable = sqliteTable("saga_executions", {
+	id: text("id").primaryKey(),
+	orderId: text("order_id")
+		.notNull()
+		.references(() => ordersTable.id),
+	currentStep: text("current_step", {
+		enum: ["reserve_stock", "process_payment"],
+	}).notNull(),
+	status: text("status", {
+		enum: ["pending", "running", "completed", "failed", "compensated"],
+	})
+		.notNull()
+		.default("pending"),
+	error: text("error"),
 	createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 	updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });

@@ -1,5 +1,5 @@
 {
-	"name": "@ledger/db",
+	"name": "@casecellshop/db",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
@@ -31,7 +31,7 @@
 		"drizzle-orm": "^0.45.2"
 	},
 	"devDependencies": {
-		"@ledger/config": "workspace:*",
+		"@casecellshop/config": "workspace:*",
 		"drizzle-kit": "^0.31.8",
 		"tsdown": "^0.16.5",
 		"tsx": "^4.19.2",

@@ -1,5 +1,5 @@
 {
-	"name": "@ledger/shared",
+	"name": "@casecellshop/shared",
 	"private": true,
 	"version": "0.0.0",
 	"type": "module",
@@ -16,7 +16,7 @@
 		"check-types": "tsc -b"
 	},
 	"devDependencies": {
-		"@ledger/config": "workspace:*",
+		"@casecellshop/config": "workspace:*",
 		"@types/express": "catalog:",
 		"@types/node": "catalog:",
 		"@types/pg": "^8.20.0",
@@ -25,10 +25,9 @@
 	},
 	"dependencies": {
 		"@aws-sdk/client-sqs": "^3.1029.0",
+		"@libsql/client": "^0.15.15",
 		"@clerk/express": "^2.1.12",
-		"@ledger/db": "workspace:*",
-		"@mutual-processadora-de-pagamentos/lib-http-kit": "^2.0.2",
-		"@mutual-processadora-de-pagamentos/lib-observability": "^1.1.5",
+		"@casecellshop/db": "workspace:*",
 		"axios": "^1.14.0",
 		"dotenv": "catalog:",
 		"drizzle-orm": "^0.45.2",

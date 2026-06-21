@@ -10,10 +10,10 @@ import * as schema from "./schema/index.js";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const paymentDbRoot = join(scriptDir, "..");
 const repoRoot = join(paymentDbRoot, "..", "..");
-const appPayment = join(repoRoot, "apps", "payment");
-const defaultDbUrl = `file:${join(repoRoot, "apps", "api-payment", "local.db")}`;
+const appApi = join(repoRoot, "apps", "api");
+const defaultDbUrl = `file:${join(repoRoot, "apps", "api", "local.db")}`;
 
-for (const base of [process.cwd(), appPayment, repoRoot, paymentDbRoot]) {
+for (const base of [process.cwd(), appApi, repoRoot, paymentDbRoot]) {
 	dotenv.config({ path: join(base, ".env") });
 	dotenv.config({ path: join(base, ".env.local"), override: true });
 }
