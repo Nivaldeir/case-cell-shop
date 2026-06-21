@@ -24,9 +24,7 @@ export class CreateProductController extends BaseController<Request, Response> {
 	inputSchema?: z.ZodType = bodySchema;
 
 	async handle(req: Request, res: Response) {
-		const body = bodySchema.parse(req.body ?? {});
-
-		const output = await this.usecase.execute(body);
+		const output = await this.usecase.execute(req.body);
 
 		return res.status(201).json({
 			message: "Product created with successfully",

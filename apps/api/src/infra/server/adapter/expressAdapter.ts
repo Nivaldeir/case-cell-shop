@@ -7,6 +7,7 @@ import express, {
 	type Response,
 } from "express";
 import type { BaseController } from "@/application/interfaces/controllers/IBaseController";
+import { env } from "@/infra/env";
 import type IServer from "./IServer";
 import type { IHttpServerSetting, InputHttp } from "./IServer";
 
@@ -23,20 +24,6 @@ export class ExpressAdapter implements IServer {
 				limit: "10mb",
 				strict: true,
 			}),
-		);
-
-		this.app.use(
-			(error: any, _req: Request, res: Response, next: NextFunction) => {
-				if (error instanceof SyntaxError && "body" in error) {
-					return res.status(400).json({
-						error: true,
-						message: "Invalid JSON format in request body",
-						details: error.message,
-					});
-				}
-
-				return next(error);
-			},
 		);
 	}
 
@@ -55,7 +42,7 @@ export class ExpressAdapter implements IServer {
 			fullPath,
 			async (req: Request, res: Response, _next: NextFunction) => {
 				const span = trace
-					.getTracer("payments-api")
+					.getTracer(env.SERVICE_NAME)
 					.startSpan(`${req.method} ${fullPath}`, {
 						attributes: {
 							"http.method": req.method,
