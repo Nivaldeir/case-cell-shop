@@ -7,12 +7,13 @@ API de processamento de pedidos e pagamentos construída como monorepo com DDD e
 ```
 payments/
 ├── apps/
-│   ├── api-payment/        # API REST (Express) — recebe pedidos e inicia a saga
-│   ├── worker-stock/       # Microserviço — reserva de estoque (step 1)
+│   ├── api/                # API REST (Express) — recebe pedidos e inicia a saga
+│   ├── worker-stock/       # Microserviço — reserva ou devolução de estoque (step 1 / 3)
 │   └── worker-payment/     # Microserviço — processamento de pagamento (step 2)
 └── packages/
     ├── db/                 # Schema Drizzle + migrations
-    └── shared/             # Domínio, interfaces e tipos compartilhados
+    ├── shared/             # Domínio, interfaces e tipos compartilhados
+    └── config/             # Configurações TypeScript compartilhadas
 ```
 
 ## Stack
@@ -20,10 +21,12 @@ payments/
 - **Runtime:** Node.js 22 + TypeScript
 - **Framework:** Express 5
 - **ORM:** Drizzle ORM + libsql (SQLite/Turso)
-- **Filas:** BullMQ + Redis
+- **Filas:** SQS (LocalStack em desenvolvimento)
+- **Cache:** Redis (ioredis)
 - **Validação:** Zod
-- **Observabilidade:** OpenTelemetry + Winston
+- **Observabilidade:** OpenTelemetry + Winston + Prometheus
 - **Monorepo:** pnpm workspaces + Turborepo
+- **Qualidade:** Biome + Husky
 
 ## Arquitetura
 
@@ -36,14 +39,14 @@ POST /orders
     │
     ├── cria Order (status: "pending")
     ├── cria saga_executions (step: "reserve_stock", status: "pending")
-    └── enfileira → [stock-reserve queue]
+    └── enfileira → [reserve_stock queue]
                           │
                     worker-stock
                     ├── saga → "running"
                     ├── valida estoque (cache → DB)
                     ├── decrementa estoque com optimistic lock (version)
                     ├── saga → step: "process_payment", status: "completed"
-                    └── enfileira → [payment-process queue]
+                    └── enfileira → [process_payment queue]
                                           │
                                     worker-payment
                                     ├── saga → "running"
@@ -51,7 +54,7 @@ POST /orders
                                     ├── aprovado → Payment(paid) + Order(paid)
                                     │             saga → "completed"
                                     └── recusado → Payment(failed)
-                                                   + restaura estoque
+                                                   + enfileira → [release_stock queue]
                                                    + Order(cancelled)
                                                    saga → "compensated"
 ```
@@ -80,6 +83,7 @@ POST /orders
 | `POST` | `/orders` | Criar pedido e iniciar saga (assíncrono) |
 | `GET` | `/orders` | Listar pedidos (paginado) |
 | `GET` | `/orders/:orderId/status` | Consultar status do pedido e pagamento |
+| `GET` | `/metrics` | Métricas Prometheus |
 
 ### POST /orders
 
@@ -126,7 +130,7 @@ POST /orders
 
 - Node.js 22+
 - pnpm 9+
-- Redis (para BullMQ)
+- Docker (para LocalStack, Jaeger e Grafana)
 
 ### Instalação
 
@@ -134,31 +138,37 @@ POST /orders
 pnpm install
 ```
 
+### Serviços de suporte
+
+```bash
+# Sobe LocalStack (SQS), Jaeger e Grafana
+docker-compose up -d
+```
+
+| Serviço | URL | Descrição |
+|---------|-----|-----------|
+| LocalStack | http://localhost:4566 | SQS local (cria as filas automaticamente) |
+| Jaeger UI | http://localhost:16686 | Visualização de traces distribuídos |
+| Grafana | http://localhost:3001 | Dashboards de métricas (admin/admin) |
+
 ### Banco de dados
 
 ```bash
-# Aplicar migrations (inclui a tabela saga_executions)
+# Aplicar migrations
 pnpm --filter @casecellshop/db db:migrate
-
-# Ou via script do app
-pnpm --filter @casecellshop/api-payment db:migrate
 ```
 
 ### Desenvolvimento
 
 ```bash
-# API
-pnpm --filter @casecellshop/api-payment dev
+# Tudo junto com Turborepo
+pnpm dev
 
-# Workers (em terminais separados)
+# Ou em terminais separados
+pnpm --filter @casecellshop/api dev          # API → http://localhost:3000
 pnpm --filter @casecellshop/worker-stock dev
 pnpm --filter @casecellshop/worker-payment dev
-
-# Ou tudo junto com Turborepo
-pnpm dev
 ```
-
-A API sobe em `http://localhost:3000` (padrão).
 
 ## Variáveis de ambiente
 
@@ -168,14 +178,30 @@ Crie um `.env` na raiz do projeto. Todas as variáveis têm valores padrão para
 |----------|--------|-----------|
 | `PORT` | `3000` | Porta da API |
 | `NODE_ENV` | `development` | Ambiente |
+| `SERVICE_NAME` | `api` | Nome do serviço (tracing) |
 | `DATABASE_URL` | `file:local.db` | URL do banco (libsql) |
 | `DATABASE_AUTH_TOKEN` | — | Token Turso (produção) |
 | `CORS_ORIGIN` | `*` | Origem permitida pelo CORS |
+| `REDIS_URL` | `redis://127.0.0.1:6379` | URL do Redis |
+| `SQS_ENDPOINT` | — | Endpoint SQS (ex: `http://localhost:4566` para LocalStack) |
+| `SQS_REGION` | `us-east-1` | Região AWS |
+| `SQS_ACCESS_KEY_ID` | `test` | Credencial AWS (use `test` com LocalStack) |
+| `SQS_SECRET_ACCESS_KEY` | `test` | Credencial AWS (use `test` com LocalStack) |
 | `OTEL_ENDPOINT` | — | Endpoint OpenTelemetry (opcional) |
-| `REDIS_URL` | `redis://127.0.0.1:6379` | URL do Redis para filas BullMQ |
 | `LOG_LEVEL` | `info` | Nível de log |
 
 > **Nota:** `DATABASE_URL` aceita caminhos relativos (resolvidos a partir da raiz do repo) ou URLs Turso (`libsql://...`). Todos os apps (API + workers) devem apontar para o mesmo banco.
+
+## Testes
+
+```bash
+pnpm test              # Todos os testes
+pnpm test:unit         # Testes unitários (domínio, use cases, controllers)
+pnpm test:integration  # Testes de infraestrutura (repositórios, DB)
+pnpm test:e2e          # Testes end-to-end (requisições HTTP reais)
+```
+
+Os testes usam SQLite in-memory (`:memory:`) e não requerem serviços externos.
 
 ## Observabilidade
 
@@ -300,6 +326,9 @@ pnpm build
 
 # Verificação de tipos
 pnpm check-types
+
+# Lint e formatação (Biome)
+pnpm check
 
 # Gerar nova migration após alterar o schema
 pnpm --filter @casecellshop/db db:generate
