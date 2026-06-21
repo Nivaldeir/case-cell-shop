@@ -14,6 +14,7 @@ import {
 } from "@casecellshop/shared";
 
 type Input = {
+	idempotencyKey: string;
 	items: {
 		productId: string;
 		quantity: number;
@@ -29,6 +30,11 @@ export class CreateOrderUsecase {
 	) {}
 
 	async execute(props: Input) {
+		const existing = await this.orderRepository.findByIdempotencyKey(
+			props.idempotencyKey,
+		);
+		if (existing) return existing.get();
+
 		const products = await this.productRepository.findByIds(
 			props.items.map((i) => i.productId),
 		);
@@ -48,7 +54,10 @@ export class CreateOrderUsecase {
 			});
 		});
 
-		const order = Order.create({ ordemItems: orderItems });
+		const order = Order.create({
+			ordemItems: orderItems,
+			idempotencyKey: props.idempotencyKey,
+		});
 
 		await this.orderRepository.create(order);
 
@@ -60,11 +69,13 @@ export class CreateOrderUsecase {
 			currentStep: SagaStepName.RESERVE_STOCK,
 		});
 
+		await this.queue.connect();
 		await this.queue.publish<JobData>(SagaStepName.RESERVE_STOCK, {
 			sagaId,
 			orderId: order.get("id")!,
 			items: props.items,
 		});
+		await this.queue.disconnect();
 
 		return order.get();
 	}

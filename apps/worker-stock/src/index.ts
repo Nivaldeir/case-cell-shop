@@ -1,4 +1,5 @@
 import {
+	initDb,
 	type JobData,
 	OrderRepository,
 	ProductRepository,
@@ -11,6 +12,8 @@ import { ReleaseStockUsecase } from "./application/usecase/ReleaseStockUsecase";
 import { ReserveStockUsecase } from "./application/usecase/ReserveStockUsecase";
 
 async function main() {
+	await initDb();
+
 	const sqs = new SQSAdapter();
 	await sqs.connect();
 
@@ -39,12 +42,16 @@ async function main() {
 				orderId,
 			});
 
-			if (output)
+			if (output.success) {
 				await sqs.publish<JobData>(SagaStepName.PROCESS_PAYMENT, {
 					sagaId,
 					orderId,
 					items,
 				});
+			}
+
+			console.log("Mensagem lida");
+			await sqs.ack(message);
 		},
 	);
 
@@ -54,6 +61,7 @@ async function main() {
 			const { sagaId, orderId, items } = message.body;
 
 			await releaseStockUsecase.execute({ sagaId, items, orderId });
+			await sqs.ack(message);
 		},
 	);
 }

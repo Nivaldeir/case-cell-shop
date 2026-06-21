@@ -15,6 +15,7 @@ export const productsTable = sqliteTable("products", {
 export const ordersTable = sqliteTable("orders", {
 	id: text("id").primaryKey(),
 	total: text("total").notNull(),
+	idempotente: text("idempotente").notNull().unique(),
 	status: text("status", {
 		enum: ["pending", "paid", "shipped", "delivered", "cancelled"],
 	})

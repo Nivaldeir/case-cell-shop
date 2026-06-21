@@ -23,7 +23,7 @@ function resolveDbUrl(raw: string): string {
 	if (!raw.startsWith("file:")) return raw;
 	const filePath = raw.slice("file:".length);
 	if (filePath.startsWith("/") || /^[A-Za-z]:/.test(filePath)) return raw;
-	return `file:${join(repoRoot, filePath)}`;
+	return `file:${join(process.cwd(), filePath)}`;
 }
 
 const rawUrl = process.env.DATABASE_URL ?? defaultDbUrl;

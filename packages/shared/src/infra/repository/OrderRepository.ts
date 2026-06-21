@@ -6,8 +6,14 @@ import { OrdemItem } from "../../domain/OrdemItem";
 import { Order } from "../../domain/Order";
 
 import { type AnyDbClient, db, runInTransaction } from "../db/client";
+import { RedisAdapter } from "../redis";
 
 export class OrderRepository implements IOrderRepository {
+	private redis = RedisAdapter.getClient();
+
+	private key(...parts: string[]) {
+		return ["order", ...parts].join(":");
+	}
 	private toOrderItem(item: typeof orderItemsTable.$inferSelect): OrdemItem {
 		return OrdemItem.restore({
 			id: item.id,
@@ -23,6 +29,7 @@ export class OrderRepository implements IOrderRepository {
 	): Order {
 		return Order.restore({
 			id: orderRow.id,
+			idempotencyKey: orderRow.idempotente,
 			amount: Number(orderRow.total),
 			status: orderRow.status,
 			ordemItems: items.map((item) => this.toOrderItem(item)),
@@ -37,6 +44,7 @@ export class OrderRepository implements IOrderRepository {
 		const execute = async (tx: AnyDbClient) => {
 			await tx.insert(ordersTable).values({
 				id: props.id,
+				idempotente: props.idempotencyKey,
 				total: String(props.amount),
 				status: props.status,
 				createdAt: props.createdAt,
@@ -66,6 +74,22 @@ export class OrderRepository implements IOrderRepository {
 	}
 
 	async findById(id: string): Promise<Order | null> {
+		const cacheKey = this.key(id);
+
+		const cached = await this.redis.get(cacheKey);
+
+		if (cached) {
+			const parsed = JSON.parse(cached);
+			return Order.restore({
+				...parsed,
+				ordemItems: parsed.ordemItems.map((item: any) =>
+					OrdemItem.restore(item),
+				),
+				createdAt: new Date(parsed.createdAt),
+				updatedAt: new Date(parsed.updatedAt),
+			});
+		}
+
 		const [orderRow] = await db
 			.select()
 			.from(ordersTable)
@@ -81,7 +105,48 @@ export class OrderRepository implements IOrderRepository {
 			.from(orderItemsTable)
 			.where(eq(orderItemsTable.orderId, id));
 
-		return this.toOrder(orderRow, items);
+		const order = this.toOrder(orderRow, items);
+
+		await this.redis.set(cacheKey, JSON.stringify(order.toJSON()));
+
+		return order;
+	}
+
+	async findByIdempotencyKey(key: string): Promise<Order | null> {
+		const cacheKey = this.key("idem", key);
+
+		const cached = await this.redis.get(cacheKey);
+
+		if (cached) {
+			const parsed = JSON.parse(cached);
+			return Order.restore({
+				...parsed,
+				ordemItems: parsed.ordemItems.map((item: any) =>
+					OrdemItem.restore(item),
+				),
+				createdAt: new Date(parsed.createdAt),
+				updatedAt: new Date(parsed.updatedAt),
+			});
+		}
+
+		const [orderRow] = await db
+			.select()
+			.from(ordersTable)
+			.where(eq(ordersTable.idempotente, key))
+			.limit(1);
+
+		if (!orderRow) return null;
+
+		const items = await db
+			.select()
+			.from(orderItemsTable)
+			.where(eq(orderItemsTable.orderId, orderRow.id));
+
+		const order = this.toOrder(orderRow, items);
+
+		await this.redis.set(cacheKey, JSON.stringify(order.toJSON()));
+
+		return order;
 	}
 
 	async updateStatus(order: Order): Promise<void> {
@@ -90,6 +155,8 @@ export class OrderRepository implements IOrderRepository {
 			.update(ordersTable)
 			.set({ status: props.status, updatedAt: props.updatedAt })
 			.where(eq(ordersTable.id, props.id));
+
+		await this.redis.del(this.key(props.id));
 	}
 
 	async findMany(

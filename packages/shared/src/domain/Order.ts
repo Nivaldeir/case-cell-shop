@@ -16,6 +16,7 @@ export type StatusOrdemEnum = z.infer<typeof StatusOrdemSchema>;
 export const OrderSchema = z
 	.object({
 		id: z.string(),
+		idempotencyKey: z.string(),
 		ordemItems: z.array(z.instanceof(OrdemItem)),
 		createdAt: z.date(),
 		updatedAt: z.date(),
@@ -32,11 +33,14 @@ export const OrderSchema = z
 export type OrderProps = z.infer<typeof OrderSchema>;
 
 export class Order extends BaseDomain<OrderProps> {
-	static create(props: Pick<OrderProps, "ordemItems">): Order {
+	static create(
+		props: Pick<OrderProps, "ordemItems" | "idempotencyKey">,
+	): Order {
 		const now = new Date();
 
 		return new Order({
 			id: GenerateId.generate("ord"),
+			idempotencyKey: props.idempotencyKey,
 			ordemItems: props.ordemItems,
 			status: "pending",
 			createdAt: now,

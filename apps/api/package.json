@@ -11,6 +11,7 @@
 		"check-types": "tsc -b",
 		"test": "tsx --test --import ./__tests__/setup.ts __tests__/**/*.test.ts",
 		"test:unit": "tsx --test --import ./__tests__/setup.ts __tests__/domain/**/*.test.ts __tests__/usecase/**/*.test.ts __tests__/controller/**/*.test.ts",
+		"test:e2e": "tsx --test --import ./__tests__/setup.ts __tests__/e2e/**/*.test.ts",
 		"test:integration": "tsx --test --import ./__tests__/setup.ts __tests__/infra/**/*.test.ts",
 		"compile": "bun build --compile --minify --sourcemap --bytecode ./src/index.ts --outfile server",
 		"dev": "tsx watch src/index.ts",

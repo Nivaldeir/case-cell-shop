@@ -1,5 +1,6 @@
 import {
 	AppError,
+	initDb,
 	type JobData,
 	OrderRepository,
 	Payment,
@@ -12,6 +13,8 @@ import {
 } from "@casecellshop/shared";
 
 async function main() {
+	await initDb();
+
 	const sqs = new SQSAdapter();
 	await sqs.connect();
 
@@ -46,7 +49,11 @@ async function main() {
 
 				const isNotPaid = Math.random() < 0.5 && true;
 
-				if (isNotPaid) throw new AppError("Forcando error");
+				if (isNotPaid) {
+					payment.markAsFailed();
+					await paymentRepository.updateStatus(payment);
+					throw new AppError("Pagamento recusado");
+				}
 
 				payment.markAsPaid();
 				await paymentRepository.updateStatus(payment);

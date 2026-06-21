@@ -21,6 +21,18 @@ const libsqlClient = createClient({
 
 export const db = drizzle(libsqlClient, { schema });
 
+let initDbPromise: Promise<void> | null = null;
+
+export function initDb(): Promise<void> {
+	if (!initDbPromise) {
+		initDbPromise = (async () => {
+			await libsqlClient.execute("PRAGMA journal_mode=WAL");
+			await libsqlClient.execute("PRAGMA busy_timeout=5000");
+		})();
+	}
+	return initDbPromise;
+}
+
 export function runInTransaction<T>(
 	dbClient: AnyDbClient,
 	fn: (tx: AnyDbClient) => Promise<T>,

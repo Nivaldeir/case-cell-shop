@@ -9,6 +9,9 @@ import {
 } from "@casecellshop/shared";
 import { compensate } from "../../shared/compensate";
 
+const MAX_RETRIES = 5;
+const RETRY_DELAY_MS = 100;
+
 type Output = {
 	success: boolean;
 };
@@ -18,41 +21,16 @@ export class ReserveStockUsecase {
 		private readonly orderRepository: IOrderRepository,
 		private readonly sagaRepository: ISagaRepository,
 	) {}
+
 	async execute(input: JobData): Promise<Output> {
 		const { items, orderId, sagaId } = input;
-		const compensated = [];
+		const compensated: Array<{ productId: string; quantity: number }> = [];
 		let success = false;
 		try {
 			await this.sagaRepository.update(sagaId, { status: SagaStatus.RUNNING });
 
-			const products = await this.productRepository.findByIds(
-				items.map((i) => i.productId),
-			);
-
-			if (!products) throw new AppError("Produtos não encontrado");
-
-			const productMap = new Map(products.map((p) => [p.get("id")!, p]));
-
 			for (const item of items) {
-				const product = productMap.get(item.productId);
-
-				if (!product)
-					throw new Error(`Produto ${item.productId} não encontrado`);
-
-				if (product.get("stock") < item.quantity) {
-					throw new Error(
-						`Estoque insuficiente para o produto ${item.productId}`,
-					);
-				}
-			}
-
-			for (const item of items) {
-				const product = productMap.get(item.productId)!;
-
-				product.decrementStock(item.quantity);
-
-				await this.productRepository.updateStock(product);
-
+				await this.decrementStockWithRetry(item.productId, item.quantity);
 				compensated.push({
 					productId: item.productId,
 					quantity: item.quantity,
@@ -63,11 +41,12 @@ export class ReserveStockUsecase {
 				status: SagaStatus.RUNNING,
 				currentStep: SagaStepName.PROCESS_PAYMENT,
 			});
-			success = false;
+			success = true;
 			console.log(
 				`[worker-stock] Estoque reservado — sagaId=${sagaId} orderId=${orderId}`,
 			);
 		} catch (error) {
+			console.log(error);
 			const errorMessage =
 				error instanceof Error ? error.message : String(error);
 
@@ -88,10 +67,38 @@ export class ReserveStockUsecase {
 				order.cancel();
 				await this.orderRepository.updateStatus(order);
 			}
-			success = false;
 		}
-		return {
-			success,
-		};
+		return { success };
+	}
+
+	private async decrementStockWithRetry(
+		productId: string,
+		quantity: number,
+		attempt = 1,
+	): Promise<void> {
+		const results = await this.productRepository.findByIds([productId]);
+		const product = results?.[0];
+
+		if (!product) throw new Error(`Produto ${productId} não encontrado`);
+
+		if (product.get("stock") < quantity) {
+			throw new Error(`Estoque insuficiente para o produto ${productId}`);
+		}
+
+		product.decrementStock(quantity);
+
+		try {
+			await this.productRepository.updateStock(product);
+		} catch (err) {
+			if (
+				err instanceof AppError &&
+				err.statusCode === 409 &&
+				attempt < MAX_RETRIES
+			) {
+				await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * attempt));
+				return this.decrementStockWithRetry(productId, quantity, attempt + 1);
+			}
+			throw err;
+		}
 	}
 }

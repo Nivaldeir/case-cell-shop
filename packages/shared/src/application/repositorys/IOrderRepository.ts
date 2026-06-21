@@ -3,6 +3,7 @@ import type { Order } from "../../domain/Order";
 export interface IOrderRepository {
 	create(order: Order, tx?: any): Promise<void>;
 	findById(id: string): Promise<Order | null>;
+	findByIdempotencyKey(key: string): Promise<Order | null>;
 	findMany(
 		page: number,
 		limit: number,

@@ -1,4 +1,5 @@
 import {
+	AppError,
 	OrderRepository,
 	ProductRepository,
 	SagaRepository,
@@ -33,9 +34,15 @@ export class CreateOrderController extends BaseController<Request, Response> {
 	inputSchema?: z.ZodType = bodySchema;
 
 	async handle(req: Request, res: Response) {
+		const idempotencyKey = req.headers["idempotency-key"] as string | undefined;
+
+		if (!idempotencyKey) {
+			throw new AppError("Header Idempotency-Key é obrigatório", 400);
+		}
+
 		const body = bodySchema.parse(req.body ?? {});
 
-		const output = await this.usecase.execute(body);
+		const output = await this.usecase.execute({ ...body, idempotencyKey });
 
 		return res.status(202).json({
 			message: "Order requested successfully",

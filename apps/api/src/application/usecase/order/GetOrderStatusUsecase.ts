@@ -40,7 +40,7 @@ export class GetOrderStatusUsecase {
 			orderId: order.get("id"),
 			status: order.get("status"),
 			amount: order.get("amount"),
-			items: order.get("ordemItems").map((item) => ({
+			items: order.get("ordemItems")?.map((item) => ({
 				productId: item.get("productId"),
 				quantity: item.get("quantity"),
 				price: item.get("price"),

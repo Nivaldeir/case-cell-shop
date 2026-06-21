@@ -5,8 +5,15 @@ import type { IProductRepository } from "../../application/repositorys/IProductR
 import { Product } from "../../domain/Product";
 import type { AnyDbClient } from "../db/client";
 import { db } from "../db/client";
+import { RedisAdapter } from "../redis";
 
 export class ProductRepository implements IProductRepository {
+	private redis = RedisAdapter.getClient();
+
+	private key(...keys: string[]) {
+		return ["product", ...keys].join(":");
+	}
+
 	async create(product: Product): Promise<void> {
 		const props = product.toJSON();
 		await db.insert(productsTable).values({
@@ -23,6 +30,14 @@ export class ProductRepository implements IProductRepository {
 	}
 
 	async findById(id: string): Promise<Product | null> {
+		const cacheKey = this.key(id);
+
+		const cached = await this.redis.get(cacheKey);
+
+		if (cached) {
+			return Product.restore(JSON.parse(cached));
+		}
+
 		const rows = await db
 			.select()
 			.from(productsTable)
@@ -31,6 +46,8 @@ export class ProductRepository implements IProductRepository {
 
 		const row = rows[0];
 		if (!row) return null;
+
+		await this.redis.set(cacheKey, JSON.stringify(row));
 
 		return Product.restore({
 			id: row.id,
@@ -46,12 +63,31 @@ export class ProductRepository implements IProductRepository {
 	}
 
 	async findByIds(ids: string[]): Promise<Product[]> {
+		const keys = ids.map((id) => this.key(id));
+
+		const cached = await this.redis.mget(keys);
+
+		const products: Product[] = [];
+		const missingIds: string[] = [];
+
+		cached.forEach((item, index) => {
+			if (item) {
+				products.push(Product.restore(JSON.parse(item)));
+			} else {
+				missingIds.push(ids[index]!);
+			}
+		});
+
+		if (missingIds.length === 0) {
+			return products;
+		}
+
 		const rows = await db
 			.select()
 			.from(productsTable)
-			.where(inArray(productsTable.id, ids));
+			.where(inArray(productsTable.id, missingIds));
 
-		return rows.map((row) =>
+		const loadedProducts = rows.map((row) =>
 			Product.restore({
 				createdAt: row.createdAt,
 				deletedAt: row.deletedAt,
@@ -64,8 +100,31 @@ export class ProductRepository implements IProductRepository {
 				id: row.id,
 			}),
 		);
-	}
 
+		// salva os que vieram do banco
+		if (loadedProducts.length) {
+			const pipeline = this.redis.pipeline();
+
+			for (const product of loadedProducts) {
+				const props = product.toJSON();
+
+				pipeline.set(
+					this.key(props.id as string),
+					JSON.stringify(props),
+					"EX",
+					300,
+				);
+			}
+
+			await pipeline.exec();
+		}
+
+		products.push(...loadedProducts);
+
+		const map = new Map(products.map((p) => [p.get("id"), p]));
+
+		return ids.map((id) => map.get(id)).filter((p): p is Product => !!p);
+	}
 	async updateStock(product: Product, tx?: AnyDbClient): Promise<void> {
 		const client = tx ?? db;
 		const props = product.toJSON();
@@ -84,6 +143,8 @@ export class ProductRepository implements IProductRepository {
 					eq(productsTable.version, previousVersion),
 				),
 			);
+
+		await this.redis.del(this.key(props.id as string));
 
 		if (result.rowsAffected === 0) {
 			throw new AppError(
