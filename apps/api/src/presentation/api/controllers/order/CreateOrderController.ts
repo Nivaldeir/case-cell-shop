@@ -35,7 +35,8 @@ export class CreateOrderController extends BaseController<Request, Response> {
 
 	async handle(req: Request, res: Response) {
 		const idempotencyKey = req.headers["idempotency-key"] as string | undefined;
-
+		const requestId = (req as any).requestId;
+		const correlationId = (req as any).correlationId;
 		if (!idempotencyKey) {
 			throw new AppError("Header Idempotency-Key é obrigatório", 400);
 		}
@@ -47,6 +48,7 @@ export class CreateOrderController extends BaseController<Request, Response> {
 		return res.status(202).json({
 			message: "Order requested successfully",
 			error: false,
+			request: { requestId, correlationId },
 			data: output,
 		});
 	}

@@ -1,20 +1,18 @@
 import {
 	AppError,
-	initDb,
-	type JobData,
+	Observability,
 	OrderRepository,
 	Payment,
 	PaymentRepository,
-	type QueueMessage,
 	SagaRepository,
 	SagaStatus,
 	SagaStepName,
 	SQSAdapter,
 } from "@casecellshop/shared";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 
 async function main() {
-	await initDb();
-
+	Observability.start();
 	const sqs = new SQSAdapter();
 	await sqs.connect();
 
@@ -22,76 +20,82 @@ async function main() {
 	const orderRepository = new OrderRepository();
 	const sagaRepository = new SagaRepository();
 
-	console.log(
-		"[worker-payment] Aguardando mensagens na fila:",
-		SagaStepName.PROCESS_PAYMENT,
-	);
+	void sqs.consume(SagaStepName.PROCESS_PAYMENT, async (message: any) => {
+		const { sagaId, orderId } = message.body;
 
-	void sqs.consume(
-		SagaStepName.PROCESS_PAYMENT,
-		async (message: QueueMessage<JobData>) => {
-			const { sagaId, orderId } = message.body;
+		await Observability.withSpan(
+			"process-payment",
+			{
+				"saga.id": sagaId,
+				"order.id": orderId,
+			},
+			async () => {
+				try {
+					await sagaRepository.update(sagaId, { status: SagaStatus.RUNNING });
 
-			try {
-				await sagaRepository.update(sagaId, { status: SagaStatus.RUNNING });
+					const order = await orderRepository.findById(orderId);
 
-				const order = await orderRepository.findById(orderId);
+					if (!order) throw new AppError(`Pedido ${orderId} não encontrado`);
 
-				if (!order) throw new AppError(`Pedido ${orderId} não encontrado`);
+					const payment = Payment.create({
+						orderId,
+						type: "pix",
+						amount: order.get("amount"),
+					});
 
-				const payment = Payment.create({
-					orderId,
-					type: "pix",
-					amount: order.get("amount"),
-				});
+					await paymentRepository.create(payment);
 
-				await paymentRepository.create(payment);
+					const isNotPaid = Math.random() < 0.5 && true;
 
-				const isNotPaid = Math.random() < 0.5 && true;
+					if (isNotPaid) {
+						payment.markAsFailed();
+						await paymentRepository.updateStatus(payment);
+						throw new AppError("Pagamento recusado");
+					}
 
-				if (isNotPaid) {
-					payment.markAsFailed();
+					payment.markAsPaid();
 					await paymentRepository.updateStatus(payment);
-					throw new AppError("Pagamento recusado");
-				}
 
-				payment.markAsPaid();
-				await paymentRepository.updateStatus(payment);
-
-				order.markAsPaid();
-				await orderRepository.updateStatus(order);
-
-				await sagaRepository.update(sagaId, { status: SagaStatus.COMPLETED });
-
-				console.log(
-					`[worker-payment] Pagamento processado — sagaId=${sagaId} orderId=${orderId}`,
-				);
-			} catch (error) {
-				const errorMessage =
-					error instanceof Error ? error.message : String(error);
-
-				console.error(
-					`[worker-payment] Falha no pagamento — sagaId=${sagaId}:`,
-					errorMessage,
-				);
-
-				await sagaRepository.update(sagaId, {
-					status: SagaStatus.COMPENSATED,
-					error: errorMessage,
-				});
-
-				await sqs.publish(SagaStepName.RELEASE_STOCK, message.body);
-
-				const order = await orderRepository.findById(orderId);
-				if (order) {
-					order.cancel();
+					order.markAsPaid();
 					await orderRepository.updateStatus(order);
+
+					await sagaRepository.update(sagaId, { status: SagaStatus.COMPLETED });
+
+					trace.getActiveSpan()?.setAttribute("payment.status", "paid");
+
+					console.log(
+						`[worker-payment] Pagamento processado — sagaId=${sagaId} orderId=${orderId}`,
+					);
+				} catch (error) {
+					const errorMessage =
+						error instanceof Error ? error.message : String(error);
+
+					console.error(
+						`[worker-payment] Falha no pagamento — sagaId=${sagaId}:`,
+						errorMessage,
+					);
+
+					trace.getActiveSpan()?.setAttribute("payment.status", "failed");
+					trace.getActiveSpan()?.setAttribute("payment.error", errorMessage);
+
+					await sagaRepository.update(sagaId, {
+						status: SagaStatus.COMPENSATED,
+						error: errorMessage,
+					});
+
+					await sqs.publish(SagaStepName.RELEASE_STOCK, message.body);
+
+					const order = await orderRepository.findById(orderId);
+					if (order) {
+						order.cancel();
+						await orderRepository.updateStatus(order);
+					}
 				}
-			} finally {
-				await sqs.ack(message);
-			}
-		},
-	);
+			},
+		);
+
+		await sqs.ack(message);
+	});
 }
 
 main();

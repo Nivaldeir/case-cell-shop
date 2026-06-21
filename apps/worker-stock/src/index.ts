@@ -1,19 +1,17 @@
 import {
-	initDb,
-	type JobData,
+	Observability,
 	OrderRepository,
 	ProductRepository,
-	type QueueMessage,
 	SagaRepository,
 	SagaStepName,
 	SQSAdapter,
 } from "@casecellshop/shared";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { ReleaseStockUsecase } from "./application/usecase/ReleaseStockUsecase";
 import { ReserveStockUsecase } from "./application/usecase/ReserveStockUsecase";
 
 async function main() {
-	await initDb();
-
+	Observability.start();
 	const sqs = new SQSAdapter();
 	await sqs.connect();
 
@@ -31,39 +29,64 @@ async function main() {
 		sagasRepository,
 	);
 
-	void sqs.consume(
-		SagaStepName.RESERVE_STOCK,
-		async (message: QueueMessage<JobData>) => {
-			const { sagaId, orderId, items } = message.body;
+	void sqs.consume(SagaStepName.RESERVE_STOCK, async (message: any) => {
+		const { sagaId, orderId, items } = message.body;
 
-			const output = await reserveStockUsecase.execute({
-				sagaId,
-				items,
-				orderId,
-			});
+		await Observability.withSpan(
+			"reserve-stock",
+			{
+				"saga.id": sagaId,
+				"order.id": orderId,
+				"input.items": JSON.stringify(items),
+			},
+			async () => {
+				const output = await reserveStockUsecase.execute({
+					sagaId,
+					items,
+					orderId,
+				});
 
-			if (output.success) {
-				await sqs.publish<JobData>(SagaStepName.PROCESS_PAYMENT, {
+				trace
+					.getActiveSpan()
+					?.setAttribute("output.success", String(output.success));
+
+				if (!output.success) {
+					trace.getActiveSpan()?.setStatus({
+						code: SpanStatusCode.ERROR,
+						message: "Falha na reserva de estoque",
+					});
+					return;
+				}
+
+				await sqs.publish(SagaStepName.PROCESS_PAYMENT, {
 					sagaId,
 					orderId,
 					items,
 				});
-			}
+			},
+		);
 
-			console.log("Mensagem lida");
-			await sqs.ack(message);
-		},
-	);
+		console.log("Mensagem lida");
+		await sqs.ack(message);
+	});
 
-	void sqs.consume(
-		SagaStepName.RELEASE_STOCK,
-		async (message: QueueMessage<JobData>) => {
-			const { sagaId, orderId, items } = message.body;
+	void sqs.consume(SagaStepName.RELEASE_STOCK, async (message: any) => {
+		const { sagaId, orderId, items } = message.body;
 
-			await releaseStockUsecase.execute({ sagaId, items, orderId });
-			await sqs.ack(message);
-		},
-	);
+		await Observability.withSpan(
+			"release-stock",
+			{
+				"saga.id": sagaId,
+				"order.id": orderId,
+				"input.items": JSON.stringify(items),
+			},
+			async () => {
+				await releaseStockUsecase.execute({ sagaId, items, orderId });
+			},
+		);
+
+		await sqs.ack(message);
+	});
 }
 
 main();

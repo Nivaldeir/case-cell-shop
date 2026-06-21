@@ -10,6 +10,7 @@ import {
 	SendMessageCommand,
 	SQSClient,
 } from "@aws-sdk/client-sqs";
+import { context, propagation } from "@opentelemetry/api";
 import {
 	type PublishOptions,
 	QueueAdapter,
@@ -146,45 +147,6 @@ export class SQSAdapter extends QueueAdapter {
 		this.queueUrls.delete(queue);
 	}
 
-	async publishV2<TMessage>(
-		queueName: string,
-		message: TMessage,
-		options?: PublishOptions,
-	): Promise<string> {
-		this.ensureConnected();
-
-		const client = this.getClientForQueue(queueName);
-		const queueUrl = await this.getQueueUrl(queueName);
-
-		const messageId = this.generateMessageId();
-		const actualQueueName = this.extractQueueName(queueName);
-		const isFifoQueue = actualQueueName.endsWith(".fifo");
-
-		const commandParams: any = {
-			QueueUrl: queueUrl,
-			MessageBody: JSON.stringify(message),
-		};
-
-		if (options?.delaySeconds !== undefined) {
-			commandParams.DelaySeconds = options.delaySeconds;
-		}
-
-		if (isFifoQueue) {
-			if (options?.messageGroupId) {
-				commandParams.MessageGroupId = options.messageGroupId;
-			}
-			if (options?.deduplicationId) {
-				commandParams.MessageDeduplicationId = options.deduplicationId;
-			} else {
-				commandParams.MessageDeduplicationId = messageId;
-			}
-		}
-
-		const command = new SendMessageCommand(commandParams);
-		const response = await client.send(command);
-		return response.MessageId || messageId;
-	}
-
 	async publish<TMessage>(
 		queueName: string,
 		message: TMessage,
@@ -195,9 +157,22 @@ export class SQSAdapter extends QueueAdapter {
 		const queueUrl = await this.getQueueUrl(queueName);
 		const messageId = this.generateMessageId();
 
+		const carrier: Record<string, string> = {};
+		propagation.inject(context.active(), carrier);
+		const messageAttributes: Record<
+			string,
+			{ DataType: string; StringValue: string }
+		> = {};
+		for (const [key, value] of Object.entries(carrier)) {
+			messageAttributes[key] = { DataType: "String", StringValue: value };
+		}
+
 		const commandParams: any = {
 			QueueUrl: queueUrl,
 			MessageBody: JSON.stringify(message),
+			...(Object.keys(messageAttributes).length > 0 && {
+				MessageAttributes: messageAttributes,
+			}),
 		};
 
 		if (options?.delaySeconds !== undefined) {
@@ -274,12 +249,24 @@ export class SQSAdapter extends QueueAdapter {
 						MaxNumberOfMessages: 10,
 						WaitTimeSeconds: 5,
 						VisibilityTimeout: 30,
+						MessageAttributeNames: ["All"],
 					});
 
 					const response = await client.send(command);
 
 					if (response.Messages && response.Messages.length > 0) {
 						for (const msg of response.Messages) {
+							const carrier: Record<string, string> = {};
+							for (const [key, attr] of Object.entries(
+								msg.MessageAttributes ?? {},
+							)) {
+								if (attr.StringValue) carrier[key] = attr.StringValue;
+							}
+							const parentContext = propagation.extract(
+								context.active(),
+								carrier,
+							);
+
 							const queueMessage: QueueMessage<any> = {
 								id: msg.MessageId || this.generateMessageId(),
 								body: JSON.parse(msg.Body || "{}") as any,
@@ -288,7 +275,7 @@ export class SQSAdapter extends QueueAdapter {
 							};
 
 							try {
-								await handler(queueMessage);
+								await context.with(parentContext, () => handler(queueMessage));
 							} catch (error) {
 								console.error("[SQS] Error processing message:", error);
 							}

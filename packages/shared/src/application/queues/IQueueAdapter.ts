@@ -36,11 +36,6 @@ export abstract class QueueAdapter {
 		messages: TMessage[],
 		options?: PublishOptions,
 	): Promise<string[]>;
-	abstract publishV2<TMessage>(
-		queueName: SagaStepName,
-		message: TMessage,
-		options?: PublishOptions,
-	): Promise<string>;
 
 	abstract ack(message: QueueMessage): Promise<void>;
 }

@@ -1,4 +1,6 @@
 //@ts-nocheck
+
+import { context, SpanStatusCode, trace } from "@opentelemetry/api";
 import express, {
 	type NextFunction,
 	type Request,
@@ -52,7 +54,40 @@ export class ExpressAdapter implements IServer {
 		this.app[controller.method](
 			fullPath,
 			async (req: Request, res: Response, _next: NextFunction) => {
-				return controller.handle(req, res);
+				const span = trace
+					.getTracer("payments-api")
+					.startSpan(`${req.method} ${fullPath}`, {
+						attributes: {
+							"http.method": req.method,
+							"http.route": fullPath,
+							"http.url": req.url,
+						},
+					});
+
+				return context.with(trace.setSpan(context.active(), span), async () => {
+					if (req.body && Object.keys(req.body).length > 0) {
+						span.setAttribute("http.request.body", JSON.stringify(req.body));
+					}
+
+					const originalJson = res.json.bind(res);
+					res.json = (body: any): Response => {
+						span.setAttribute("http.status_code", res.statusCode);
+						span.setAttribute("http.response.body", JSON.stringify(body));
+						return originalJson(body);
+					};
+
+					try {
+						const result = await controller.handle(req, res);
+						span.setStatus({ code: SpanStatusCode.OK });
+						return result;
+					} catch (err) {
+						span.setStatus({ code: SpanStatusCode.ERROR });
+						span.recordException(err as Error);
+						throw err;
+					} finally {
+						span.end();
+					}
+				});
 			},
 		);
 	}
@@ -71,8 +106,17 @@ export class ExpressAdapter implements IServer {
 		this.app[method](
 			fullPath,
 			async (req: Request, res: Response, next: NextFunction) => {
+				const requestId = (req as any).requestId;
+				const correlationId = (req as any).correlationId;
 				const output = await callback(req, res, next);
-				res.json(output);
+
+				res.json({
+					...output,
+					request: {
+						requestId,
+						correlationId,
+					},
+				});
 			},
 		);
 	}
