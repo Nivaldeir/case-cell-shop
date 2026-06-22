@@ -69,13 +69,11 @@ export class CreateOrderUsecase {
 			currentStep: SagaStepName.RESERVE_STOCK,
 		});
 
-		await this.queue.connect();
 		await this.queue.publish<JobData>(SagaStepName.RESERVE_STOCK, {
 			sagaId,
 			orderId: order.get("id")!,
 			items: props.items,
 		});
-		await this.queue.disconnect();
 
 		return order.get();
 	}

@@ -412,7 +412,7 @@ export class SQSAdapter extends QueueAdapter {
 
 	private ensureConnected(): void {
 		if (!this.connected) {
-			throw new Error("[SQS] Not connected. Call connect() first.");
+			this.connected = true;
 		}
 	}
 

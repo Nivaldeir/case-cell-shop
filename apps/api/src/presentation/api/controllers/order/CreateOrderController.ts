@@ -2,8 +2,8 @@ import {
 	AppError,
 	OrderRepository,
 	ProductRepository,
+	QueueSingleton,
 	SagaRepository,
-	SQSAdapter,
 } from "@casecellshop/shared";
 import type { Request, Response } from "express";
 import { z } from "zod";
@@ -59,6 +59,6 @@ export default new CreateOrderController(
 		new OrderRepository(),
 		new ProductRepository(),
 		new SagaRepository(),
-		new SQSAdapter(),
+		QueueSingleton.getInstance(),
 	),
 );
