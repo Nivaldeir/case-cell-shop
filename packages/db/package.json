@@ -1,0 +1,40 @@
+{
+	"name": "@casecellshop/db",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"types": "./src/index.ts",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./dist/index.mjs",
+			"default": "./dist/index.mjs"
+		},
+		"./schema": {
+			"types": "./src/schema/schema.ts",
+			"import": "./dist/schema.mjs",
+			"default": "./dist/schema.mjs"
+		}
+	},
+	"scripts": {
+		"build": "tsdown && tsc -b",
+		"check-types": "tsc -b",
+		"db:generate": "drizzle-kit generate",
+		"db:push": "drizzle-kit push",
+		"db:studio": "drizzle-kit studio",
+		"db:migrate": "tsx src/run-migrate.ts",
+		"db:seed": "tsx src/run-seed.ts"
+	},
+	"dependencies": {
+		"@libsql/client": "^0.15.15",
+		"dotenv": "catalog:",
+		"drizzle-orm": "^0.45.2"
+	},
+	"devDependencies": {
+		"@casecellshop/config": "workspace:*",
+		"drizzle-kit": "^0.31.8",
+		"tsdown": "^0.16.5",
+		"tsx": "^4.19.2",
+		"typescript": "catalog:"
+	}
+}

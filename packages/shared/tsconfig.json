@@ -1,0 +1,17 @@
+{
+	"extends": "../config/tsconfig.base.json",
+	"compilerOptions": {
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true,
+		"outDir": "dist",
+		"composite": true,
+		"paths": {
+			"@/*": ["./src/*"]
+		}
+	},
+	"references": [{ "path": "../db" }],
+	"include": ["src/**/*.ts"]
+}
