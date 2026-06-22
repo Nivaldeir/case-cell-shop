@@ -108,6 +108,10 @@ export class ExpressAdapter implements IServer {
 		);
 	}
 
+	use(path: string, ...handlers: any[]): void {
+		this.app.use(path, ...handlers);
+	}
+
 	listen(port: number, host?: string): void {
 		this.app.listen(port, host);
 	}
